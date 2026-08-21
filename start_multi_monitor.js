@@ -13,9 +13,9 @@ function log(msg) {
   } catch (e) {}
 }
 
-// In-tab atomic execution script
+// In-tab atomic execution script (Synchronous evaluation for instant AppleScript return)
 const inTabScript = `
-(async () => {
+(() => {
   const fastClick = (el) => {
     if (!el) return false;
     const opts = { bubbles: true, cancelable: true, view: window, buttons: 1 };
@@ -43,24 +43,19 @@ const inTabScript = `
 
   if (refreshBtn) fastClick(refreshBtn);
 
-  // 2. 10ms 초미세 폴링으로 '일반 2인' 즉시 재선택 (새로고침 찰나 반응)
+  // 2. 일반 2인 선택 버튼 확보
   const getGeneralTwoBtn = () => {
     const generalWrap = Array.from(document.querySelectorAll('.numberChoice_NumberWrap__JKTv1, [class*="NumberWrap"], [class*="numberChoice"]')).find(w => (w.innerText || '').includes('일반'));
     return generalWrap ? (generalWrap.querySelector('button[aria-label="2 선택"]') || Array.from(generalWrap.querySelectorAll('button')).find(btn => btn.innerText.trim() === '2'))
                        : document.querySelector('button[aria-label="2 선택"]');
   };
 
-  const pollStart = performance.now();
-  while (performance.now() - pollStart < 350) {
-    const twoBtn = getGeneralTwoBtn();
-    if (twoBtn && twoBtn.getAttribute('aria-pressed') !== 'true') {
-      fastClick(twoBtn);
-      break;
-    }
-    await new Promise(r => setTimeout(r, 10));
+  const twoBtn = getGeneralTwoBtn();
+  if (twoBtn && twoBtn.getAttribute('aria-pressed') !== 'true') {
+    fastClick(twoBtn);
   }
 
-  // 3. 실시간 메인 좌석 배치도 분석 (E열 이상 중앙 최단거리 2연석, 미니맵 제외)
+  // 3. 메인 좌석 배치도 분석 (E열 이상 중앙 최단거리 2연석, 미니맵 제외)
   const allSeats = Array.from(document.querySelectorAll('button.seatMap_seatNumber__JHck5, .seatMap_seatPositionWrap__v5y_3 button'))
     .filter(b => {
       const cls = b.className || '';
@@ -106,51 +101,39 @@ const inTabScript = `
 
   candidatePairs.sort((a, b) => a.distFromCenter - b.distFromCenter);
 
-  // 영화 및 상영 정보 추출
-  const movieEl = document.querySelector('h1, h2, h3, [class*="movieTitle"], [class*="MovieTitle"]');
-  const movieName = movieEl ? movieEl.innerText.trim() : '';
+  // 상영 시간/회차 정보
+  const timeBtns = Array.from(document.querySelectorAll('button, li, div')).filter(el => /\\d{2}:\\d{2}/.test(el.innerText || ''));
+  const activeTime = timeBtns.find(b => b.className && (b.className.includes('active') || b.className.includes('selected') || b.className.includes('on')));
+  const timeInfo = activeTime ? activeTime.innerText.replace(/\\s+/g, ' ').trim().slice(0, 30) : (timeBtns.length > 0 ? timeBtns[0].innerText.replace(/\\s+/g, ' ').trim().slice(0, 30) : '');
 
   if (candidatePairs.length > 0) {
     const best = candidatePairs[0];
 
-    // 즉시 좌석 2자리 클릭 (딜레이 0ms)
+    // 즉시 좌석 2자리 클릭
     fastClick(best.el1);
     fastClick(best.el2);
 
-    // 하단 '선택' 또는 '선택완료' 즉시 클릭 (딜레이 0ms)
+    // 하단 '선택 / 선택완료' 즉시 클릭
     const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.trim() === '선택' || b.innerText.includes('선택완료'));
     if (confirmBtn) fastClick(confirmBtn);
 
-    // 결제하기 및 팝업 확인 초고속 반응형 인터셉트 (10ms 폴링)
-    const payStart = performance.now();
-    let payClicked = false;
-    let okClicked = false;
+    // 결제하기 및 팝업 확인 인터셉트
+    setTimeout(() => {
+      const payBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('결제하기') || b.innerText.trim() === '결제');
+      if (payBtn) fastClick(payBtn);
 
-    while (performance.now() - payStart < 1500) {
-      if (!payClicked) {
-        const payBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('결제하기') || b.innerText.trim() === '결제');
-        if (payBtn && !payBtn.disabled) {
-          fastClick(payBtn);
-          payClicked = true;
-        }
-      }
-      if (payClicked && !okClicked) {
+      setTimeout(() => {
         const dialog = document.querySelector('dialog, [role="dialog"], .layer_popup, .popup') || document.body;
         const okBtn = Array.from(dialog.querySelectorAll('button')).find(b => b.innerText.trim() === '확인' || (b.innerText.trim() === '결제하기' && b.className.includes('fill-main')));
-        if (okBtn) {
-          fastClick(okBtn);
-          okClicked = true;
-          break;
-        }
-      }
-      await new Promise(r => setTimeout(r, 10));
-    }
+        if (okBtn) fastClick(okBtn);
+      }, 300);
+    }, 300);
 
     return JSON.stringify({
       found: true,
       pairStr: best.pairStr,
       totalAvailable: allSeats.length,
-      movieName,
+      timeInfo,
       url: window.location.href
     });
   }
@@ -159,7 +142,7 @@ const inTabScript = `
     found: false,
     pairStr: null,
     totalAvailable: allSeats.length,
-    movieName,
+    timeInfo,
     url: window.location.href
   });
 })()
@@ -183,7 +166,8 @@ tell application "Google Chrome"
     end repeat
     set wIdx to wIdx + 1
   end repeat
-  return res
+  set AppleScript's text item delimiters to "___TAB_SEP___"
+  return res as text
 end tell
 `;
     const proc = spawn('osascript', ['-']);
@@ -191,7 +175,7 @@ end tell
     proc.stdout.on('data', d => out += d);
     proc.on('close', () => {
       if (!out.trim()) return resolve([]);
-      const rawList = out.trim().split(', ');
+      const rawList = out.trim().split('___TAB_SEP___');
       const tabs = [];
       for (const item of rawList) {
         const parts = item.split('::');
@@ -254,7 +238,7 @@ end tell
 
 async function main() {
   log('🚀 === CGV [멀티 탭 동시 모니터링] 초고속 자동 예매 시스템 가동 ===');
-  log('📋 조건: [일반 2인] ➔ [새로고침] ➔ [E열 이상 중앙 최단거리 2연석 선점] ➔ [결제창 직행]');
+  log('📋 설정: [일반 2인] ➔ [새로고침] ➔ [E열 이상 중앙 최단거리 2연석 선점] ➔ [결제창 직행]');
 
   let round = 1;
   const ROUND_INTERVAL_MS = 1500; // 탭 순회 주기 (1.5초)
@@ -278,10 +262,12 @@ async function main() {
         const t = tabs[i];
         const res = await runInTab(t.winIdx, t.tabIdx);
 
+        const timeLabel = res.timeInfo ? ` (${res.timeInfo})` : '';
+
         if (res.found) {
           matched = true;
           log(`\n🎉🎉🎉 [대박! 취소표 2연석 발견 및 선점 완료!]`);
-          log(`📍 대상 탭: [탭 ${i + 1}] (Window ${t.winIdx}, Tab ${t.tabIdx})`);
+          log(`📍 대상 탭: [탭 ${i + 1}]${timeLabel} (Window ${t.winIdx}, Tab ${t.tabIdx})`);
           log(`💺 좌석: ${res.pairStr}`);
           log(`💳 최종 결제 페이지(https://cgv.co.kr/mpy/main)로 진입했습니다!`);
 
@@ -292,7 +278,7 @@ async function main() {
           } catch (e) {}
           break;
         } else if (res.totalAvailable !== undefined) {
-          log(`  • [탭 ${i + 1}] 잔여석: ${res.totalAvailable}석 (E열 이상 중앙 2연석 대기 중)`);
+          log(`  • [탭 ${i + 1}]${timeLabel} 잔여석: ${res.totalAvailable}석 (E열 이상 중앙 2연석 대기 중)`);
         } else if (res.error) {
           log(`  • [탭 ${i + 1}] 상태: ${res.error.slice(0, 60)}`);
         }
