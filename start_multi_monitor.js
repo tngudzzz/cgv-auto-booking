@@ -3,6 +3,12 @@ const fs = require('fs');
 const path = require('path');
 
 const LOG_FILE = path.join(__dirname, 'multi_monitor.log');
+const MIN_ROUND_INTERVAL_MS = 5000;
+const MAX_MONITORED_TABS = 4;
+const requestedInterval = Number(process.env.CGV_POLL_INTERVAL_MS);
+const ROUND_INTERVAL_MS = Number.isFinite(requestedInterval)
+  ? Math.max(MIN_ROUND_INTERVAL_MS, requestedInterval)
+  : MIN_ROUND_INTERVAL_MS;
 
 function log(msg) {
   const ts = new Date().toLocaleTimeString();
@@ -32,7 +38,7 @@ const inTabScript = `
     }
   };
 
-  // 1. 관람인원 우측 새로고침 버튼 즉시 클릭 (딜레이 0ms)
+  // 1. 관람인원 우측 새로고침 버튼 클릭
   const refreshBtn = document.querySelector('button[title="새로고침"]') ||
                      document.querySelector('.cnms01520_titleWrap__ITsqM button') ||
                      Array.from(document.querySelectorAll('button')).find(b => {
@@ -237,11 +243,10 @@ end tell
 }
 
 async function main() {
-  log('🚀 === CGV [멀티 탭 동시 모니터링] 초고속 자동 예매 시스템 가동 ===');
-  log('📋 설정: [일반 2인] ➔ [새로고침] ➔ [E열 이상 중앙 최단거리 2연석 선점] ➔ [결제창 직행]');
+  log('🚀 === CGV 멀티 탭 좌석 상태 모니터링 시작 ===');
+  log('📋 설정: [일반 2인] ➔ [새로고침] ➔ [E열 이상 중앙 2연석 탐색] ➔ [결제 화면 진입]');
 
   let round = 1;
-  const ROUND_INTERVAL_MS = 1500; // 탭 순회 주기 (1.5초)
 
   while (true) {
     try {
@@ -254,22 +259,26 @@ async function main() {
         continue;
       }
 
-      log(`\n[Round ${round}] 총 ${tabs.length}개 탭 실시간 동시 모니터링 중... (${new Date().toLocaleTimeString()})`);
+      const monitoredTabs = tabs.slice(0, MAX_MONITORED_TABS);
+      if (tabs.length > MAX_MONITORED_TABS) {
+        log(`[Round ${round}] ${tabs.length}개 탭 중 최대 ${MAX_MONITORED_TABS}개만 확인합니다.`);
+      }
+      log(`\n[Round ${round}] 총 ${monitoredTabs.length}개 탭 모니터링 중... (${new Date().toLocaleTimeString()})`);
 
       let matched = false;
 
-      for (let i = 0; i < tabs.length; i++) {
-        const t = tabs[i];
+      for (let i = 0; i < monitoredTabs.length; i++) {
+        const t = monitoredTabs[i];
         const res = await runInTab(t.winIdx, t.tabIdx);
 
         const timeLabel = res.timeInfo ? ` (${res.timeInfo})` : '';
 
         if (res.found) {
           matched = true;
-          log(`\n🎉🎉🎉 [대박! 취소표 2연석 발견 및 선점 완료!]`);
+          log(`\n[좌석 후보 발견]`);
           log(`📍 대상 탭: [탭 ${i + 1}]${timeLabel} (Window ${t.winIdx}, Tab ${t.tabIdx})`);
           log(`💺 좌석: ${res.pairStr}`);
-          log(`💳 최종 결제 페이지(https://cgv.co.kr/mpy/main)로 진입했습니다!`);
+          log('💳 결제 화면 진입을 시도했습니다.');
 
           // 화면 활성화 및 알림음
           focusTab(t.winIdx, t.tabIdx);
@@ -283,12 +292,12 @@ async function main() {
           log(`  • [탭 ${i + 1}] 상태: ${res.error.slice(0, 60)}`);
         }
 
-        // 탭 간 초미세 간격
+        // 탭 간 처리 간격
         await new Promise(r => setTimeout(r, 100));
       }
 
       if (matched) {
-        log('🏁 [예매 완료] 프로세스를 종료합니다. 결제를 진행해 주세요.');
+        log('🏁 좌석 후보를 발견해 모니터링을 종료합니다. 화면을 확인해 주세요.');
         break;
       }
 

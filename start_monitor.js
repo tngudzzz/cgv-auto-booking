@@ -3,6 +3,11 @@ const fs = require('fs');
 const path = require('path');
 
 const LOG_FILE = path.join(__dirname, 'monitor.log');
+const MIN_POLL_INTERVAL_MS = 5000;
+const requestedInterval = Number(process.env.CGV_POLL_INTERVAL_MS);
+const INTERVAL_MS = Number.isFinite(requestedInterval)
+  ? Math.max(MIN_POLL_INTERVAL_MS, requestedInterval)
+  : MIN_POLL_INTERVAL_MS;
 
 function log(msg) {
   const ts = new Date().toLocaleTimeString();
@@ -31,7 +36,7 @@ const monitorScript = `
     }
   };
 
-  // 1. 새로고침 버튼 즉시 클릭 (딜레이 0ms)
+  // 1. 새로고침 버튼 클릭
   const refreshBtn = document.querySelector('button[title="새로고침"]') ||
                      document.querySelector('.cnms01520_titleWrap__ITsqM button') ||
                      Array.from(document.querySelectorAll('button')).find(b => {
@@ -42,7 +47,7 @@ const monitorScript = `
 
   if (refreshBtn) fastClick(refreshBtn);
 
-  // 2. 10ms 초미세 폴링으로 '일반 2인' 즉시 재선택 (비동기 갱신 찰나 반응)
+  // 2. 비동기 DOM 갱신을 짧게 확인해 '일반 2인' 재선택
   const getGeneralTwoBtn = () => {
     const generalWrap = Array.from(document.querySelectorAll('.numberChoice_NumberWrap__JKTv1, [class*="NumberWrap"], [class*="numberChoice"]')).find(w => (w.innerText || '').includes('일반'));
     return generalWrap ? (generalWrap.querySelector('button[aria-label="2 선택"]') || Array.from(generalWrap.querySelectorAll('button')).find(btn => btn.innerText.trim() === '2'))
@@ -110,15 +115,15 @@ const monitorScript = `
   if (candidatePairs.length > 0) {
     const best = candidatePairs[0];
 
-    // 즉시 좌석 2자리 클릭 (딜레이 0ms)
+    // 좌석 2자리 클릭
     fastClick(best.el1);
     fastClick(best.el2);
 
-    // 하단 '선택 / 선택완료' 즉시 클릭 (딜레이 0ms)
+    // 하단 '선택 / 선택완료' 클릭
     const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.trim() === '선택' || b.innerText.includes('선택완료'));
     if (confirmBtn) fastClick(confirmBtn);
 
-    // 결제하기 및 팝업 확인 초고속 반응형 인터셉트 (10ms 폴링)
+    // 결제하기 및 팝업 상태 확인
     const payStart = performance.now();
     let payClicked = false;
     let okClicked = false;
@@ -188,19 +193,18 @@ end tell
 }
 
 async function main() {
-  log('🚀 === CGV 실시간 취소표 자동 모니터링 데몬 시작 ===');
-  log('설정: [일반 2인 고정] ➔ [새로고침] ➔ [E열 이상 중앙 2연석 선점] ➔ [결제창 직행]');
+  log('🚀 === CGV 좌석 상태 모니터링 시작 ===');
+  log('설정: [일반 2인 고정] ➔ [새로고침] ➔ [E열 이상 중앙 2연석 탐색] ➔ [결제 화면 진입]');
   
   let round = 1;
-  const INTERVAL_MS = 2000; // 안전 고속 모니터링 주기 (2초)
 
   while (true) {
     try {
       const res = await runCycle();
 
       if (res.found) {
-        log(`\n🎉🎉🎉 [대박! 취소표 발견 및 결제 진입 완료!] 좌석: ${res.pairStr}`);
-        log(`결제 페이지(https://cgv.co.kr/mpy/main)로 즉시 이동했습니다!`);
+        log(`\n[좌석 후보 발견 및 결제 화면 진입] 좌석: ${res.pairStr}`);
+        log('결제 페이지 진입을 시도했습니다.');
         try {
           spawn('afplay', ['/System/Library/Sounds/Glass.aiff']);
         } catch (e) {}
